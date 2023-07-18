@@ -1,6 +1,9 @@
 # WenXinAPI
 
+[![PyPi](https://img.shields.io/pypi/v/revWenXin.svg)](https://pypi.python.org/pypi/revWenXin)
+
 对百度文心一言API的简单封装，支持多用户上下文对话
+[github地址](https://github.com/umbrella-leaf/WenXinAPI)
 
 ## 安装
 
