@@ -5,6 +5,7 @@ import json
 import re
 import httpx
 import asyncio
+import threading
 from typing import AsyncGenerator
 
 from WenXinAPI import typings as t
@@ -20,6 +21,7 @@ class ChatBot:
     """
     regNonWord = re.compile(r'\W+')  # 匹配连续的非单词(非字母、数字以及汉字，即匹配标点符号与空白，作为单词分隔符）
     regHanzi = re.compile(r"([\u4e00-\u9fa5])")  # 匹配单个汉字
+    lock = threading.Lock()  # 限制并发使用的锁
 
     def __init__(
             self,
@@ -248,6 +250,12 @@ class ChatBot:
         self.__truncate_conversation(convo_id=convo_id)
         # 完整的回答文本
         full_response: str = ""
+
+        # 没有获得锁则一直死循环
+        while not self.lock.acquire(blocking=False):
+            pass
+        # 获得锁则启动定时器，1s后释放，使得其他请求可以发送，这样就解决了QPS限制为1下的并发问题
+        threading.Timer(interval=1, function=self.lock.release).start()
 
         async for content in self.send_request(convo_id=convo_id, **kwargs):
             full_response += content
