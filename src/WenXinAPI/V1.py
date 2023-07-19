@@ -49,6 +49,8 @@ class ChatBot:
         if engine not in ENGINES:
             raise t.ActionsError(f"引擎 {engine} 不被支持， 请从 {ENGINES} 中选择！")
         self.engine: ENGINE = ENGINE(engine)
+        # 获取请求地址endpoint
+        self.endpoint: str = getattr(ENDPOINT, self.engine.name).value
         self.api_key: str = api_key
         self.secret_key: str = secret_key
         self.timeout: float = timeout
@@ -170,6 +172,63 @@ class ChatBot:
             self._access_token = response.get("access_token")
         return self._access_token
 
+    async def send_request(self, convo_id: str = "default", **kwargs) -> AsyncGenerator[str, None]:
+        """
+        发送API请求的实际函数，含token过期重试逻辑
+        :param convo_id: 会话id，默认值"default"
+        :return: 回答文本异步生成器
+        """
+        # 获取鉴权密钥access_token
+        access_token = await self.get_access_token()
+        # 获取回答，默认异步
+        async with self.session.stream(
+                method="post",
+                url=f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/{self.endpoint}",
+                params={"access_token": access_token},
+                json={
+                    "messages": self.conversations[convo_id],
+                    "stream": True,
+                    # 可选参数，为方便起见一并传输
+                    "temperature": kwargs.get("temperature", self.temperature),
+                    "top_p": kwargs.get("top_p", self.top_p),
+                    "penalty_score": kwargs.get("penalty_score", self.penalty_score),
+                    "user_id": convo_id,
+                },
+                timeout=kwargs.get("timeout", self.timeout),
+        ) as response:
+            if response.status_code != 200:
+                await response.aread()
+                raise t.APIConnectionError(
+                    f"{response.status_code} {response.reason_phrase} {response.text}"
+                )
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if not line:
+                    continue
+                # 单行以"data: "开头，说明正常返回
+                if line.startswith("data: "):
+                    # 去除 "data: "
+                    line = line[6:]
+                resp: dict = json.loads(line)
+                error_code: int = resp.get("error_code")
+                is_end: bool = resp.get("is_end")
+                first_sentence: bool = True if resp.get("sentence_id") == 0 else False
+                # 错误码111说明token过期，此时应该重新获取token并再次发起请求，而非抛出错误
+                if error_code and error_code == 111:
+                    await self.get_access_token(refresh=True)
+                    async for content in self.send_request(convo_id, **kwargs):
+                        yield content
+                    break
+                # 否则如果出错，直接抛出响应错误
+                elif error_code:
+                    raise t.ResponseError(f"{error_code} {resp.get('error_msg')}")
+                # 否则按正常流程执行，is_end为真且不是第一个回答则说明回答结束
+                elif is_end and (not first_sentence):
+                    break
+                else:
+                    content: str = resp.get("result")
+                    yield content
+
     async def ask_stream(
             self,
             prompt: str,
@@ -187,64 +246,10 @@ class ChatBot:
             self.reset(convo_id=convo_id)
         self.add_to_conversation(message=prompt, role=ROLE.USER, convo_id=convo_id)
         self.__truncate_conversation(convo_id=convo_id)
-        # 获取请求地址endpoint
-        endpoint: str = getattr(ENDPOINT, self.engine.name).value
         # 完整的回答文本
         full_response: str = ""
 
-        async def send_request() -> AsyncGenerator[str, None]:
-            # 获取鉴权密钥access_token
-            access_token = await self.get_access_token()
-            # 获取回答，默认异步
-            async with self.session.stream(
-                method="post",
-                url=f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/{endpoint}",
-                params={"access_token": access_token},
-                json={
-                    "messages": self.conversations[convo_id],
-                    "stream": True,
-                    # 可选参数，为方便起见一并传输
-                    "temperature": kwargs.get("temperature", self.temperature),
-                    "top_p": kwargs.get("top_p", self.top_p),
-                    "penalty_score": kwargs.get("penalty_score", self.penalty_score),
-                    "user_id": convo_id,
-                },
-                timeout=kwargs.get("timeout", self.timeout),
-            ) as response:
-                if response.status_code != 200:
-                    await response.aread()
-                    raise t.APIConnectionError(
-                        f"{response.status_code} {response.reason_phrase} {response.text}"
-                    )
-                async for line in response.aiter_lines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    # 单行以"data: "开头，说明正常返回
-                    if line.startswith("data: "):
-                        # 去除 "data: "
-                        line = line[6:]
-                    resp: dict = json.loads(line)
-                    error_code: int = resp.get("error_code")
-                    is_end: bool = resp.get("is_end")
-                    first_sentence: bool = True if resp.get("sentence_id") == 0 else False
-                    # 错误码111说明token过期，此时应该重新获取token并再次发起请求，而非抛出错误
-                    if error_code and error_code == 111:
-                        await self.get_access_token(refresh=True)
-                        async for content in send_request():
-                            yield content
-                        break
-                    # 否则如果出错，直接抛出响应错误
-                    elif error_code:
-                        raise t.ResponseError(f"{error_code} {resp.get('error_msg')}")
-                    # 否则按正常流程执行，is_end为真且不是第一个回答则说明回答结束
-                    elif is_end and (not first_sentence):
-                        break
-                    else:
-                        content: str = resp.get("result")
-                        yield content
-
-        async for content in send_request():
+        async for content in self.send_request(convo_id=convo_id, **kwargs):
             full_response += content
             yield content
         self.add_to_conversation(full_response, ROLE.ASSISTANT, convo_id=convo_id)
