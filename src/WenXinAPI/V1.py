@@ -6,6 +6,7 @@ import re
 import httpx
 import asyncio
 import threading
+import traceback
 from typing import AsyncGenerator
 
 from WenXinAPI import typings as t
@@ -94,6 +95,14 @@ class ChatBot:
             "role": role.value,
             "content": message,
         })
+
+    def rollback_conversation(self, convo_id: str):
+        """
+        回滚会话，移除会话中最后一条对话信息
+        :param convo_id: 会话id，默认值“default”
+        :return:
+        """
+        self.conversations[convo_id].pop()
 
     def __truncate_conversation(self, convo_id: str = "default") -> None:
         """
@@ -257,10 +266,16 @@ class ChatBot:
         # 获得锁则启动定时器，1s后释放，使得其他请求可以发送，这样就解决了QPS限制为1下的并发问题
         threading.Timer(interval=1, function=self.lock.release).start()
 
-        async for content in self.send_request(convo_id=convo_id, **kwargs):
-            full_response += content
-            yield content
-        self.add_to_conversation(full_response, ROLE.ASSISTANT, convo_id=convo_id)
+        try:
+            async for content in self.send_request(convo_id=convo_id, **kwargs):
+                full_response += content
+                yield content
+            self.add_to_conversation(full_response, ROLE.ASSISTANT, convo_id=convo_id)
+        # 如果请求过程中发生错误，那么就删去最后一条对话（用户问话），以保证对话总数还是偶数（相当于当前轮次实际未进行）
+        except t.ChatBotError:
+            print(traceback.format_exc())
+            self.rollback_conversation(convo_id=convo_id)
+            yield "不好意思，小度出了一点问题哦！"
 
     async def ask(
             self,
