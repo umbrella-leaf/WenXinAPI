@@ -164,7 +164,7 @@ class ChatBot:
                     'Accept': 'application/json'
                 }
             )).json()
-            if response.get("error") :
+            if response.get("error"):
                 error_description = response.get("error_description")
                 if error_description == "unknown client id":
                     raise t.AuthenticationError("API_KEY不正确！")
@@ -281,6 +281,3 @@ class ChatBot:
         :return:
         """
         self.conversations[convo_id] = []
-
-
-
