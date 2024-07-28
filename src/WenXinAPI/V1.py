@@ -70,7 +70,7 @@ class ChatBot:
             timeout=timeout,
         )
         # 初始化时获取access_token
-        asyncio.get_event_loop().run_until_complete(self.get_access_token())
+        asyncio.ensure_future(self.get_access_token())
 
         # 初始化对话字典（每一项储存单个用户全部对话）
         self.conversations: dict[str, list[dict]] = {
