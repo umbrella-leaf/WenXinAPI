@@ -24,14 +24,7 @@ setup(
     package_dir={"": "src"},
     py_modules=["WenXinAPI"],
     install_requires=[
-        "anyio==3.7.1",
-        "certifi==2023.5.7",
-        "exceptiongroup==1.1.2",
-        "h11==0.14.0",
-        "httpcore==0.17.3",
-        "httpx==0.24.1",
-        "idna==3.4",
-        "sniffio==1.3.0",
+        "httpx"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
